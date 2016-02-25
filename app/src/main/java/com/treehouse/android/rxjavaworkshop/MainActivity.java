@@ -1,130 +1,132 @@
 package com.treehouse.android.rxjavaworkshop;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
 import android.support.v7.widget.Toolbar;
 import android.text.TextUtils;
-import android.view.View;
 import android.view.inputmethod.InputMethodManager;
-import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.Spinner;
 
+import com.jakewharton.rxbinding.view.RxView;
+import com.jakewharton.rxbinding.widget.RxAdapterView;
+
+import butterknife.Bind;
+import butterknife.ButterKnife;
+import rx.android.schedulers.AndroidSchedulers;
+import rx.functions.Action1;
+import rx.functions.Func1;
+import rx.schedulers.Schedulers;
+import rx.subscriptions.CompositeSubscription;
+
 public class MainActivity extends AppCompatActivity {
 
     private static final String LIST = "list";
+    private static final String FILTER = "filter";
 
-
+    @Bind(R.id.toolbar)
     Toolbar toolbar;
+    @Bind(R.id.spinner)
     Spinner spinner;
-
+    @Bind(R.id.add_todo_input)
     EditText addInput;
-
+    @Bind(R.id.recyclerview)
     RecyclerView recyclerView;
+
     TodoAdapter adapter;
 
-    TodoList list;
     TodoListFilter filter;
+
+    CompositeSubscription subscriptions = new CompositeSubscription();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        ButterKnife.bind(this);
+        setSupportActionBar(toolbar);
 
-        // retrieve from Saved State or SharedPreferences if we are starting fresh
-        if (savedInstanceState != null) {
-            list = new TodoList(savedInstanceState.getString(LIST));
+        spinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, new String[]{"All", "Incomplete", "Completed"}));
+
+        if (savedInstanceState == null) {
+            TodoList l = new TodoList();
+            l.add(new Todo("Sample 1", false));
+            l.add(new Todo("Sample 2", true));
+            l.add(new Todo("Sample 3", false));
+
+            filter = new TodoListFilter(l, TodoListFilter.ALL);
         } else {
-            list = new TodoList(getSharedPreferences("data", Context.MODE_PRIVATE).getString(LIST, null));
+            filter = new TodoListFilter(
+                    new TodoList(savedInstanceState.getString(LIST)),
+                    savedInstanceState.getInt(FILTER)
+            );
         }
 
-        // setup the Filter which allows us to get the data we want to display
-        filter = new TodoListFilter(list);
 
-        // setup the Adapter, this contains a callback when an item is checked/unchecked
-        adapter = new TodoAdapter(this, new TodoCompletedChangeListener() {
-            @Override
-            public void onTodoCompletedChanged(Todo todo) {
-                list.toggle(todo);
-                adapter.onTodoListChanged(filter.getFilteredData());
-            }
-        });
+        adapter = new TodoAdapter(this, filter);
 
         // setup the list with the adapter
-        recyclerView = (RecyclerView) findViewById(R.id.recyclerview);
         recyclerView.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.VERTICAL, false));
         recyclerView.setAdapter(adapter);
 
-        // setup adding new items to the list
-        addInput = (EditText) findViewById(R.id.add_todo_input);
-        findViewById(R.id.add_todo_container).requestFocus(); // ensures the edittext isn't focused when entering the Activity
-        findViewById(R.id.btn_add_todo).setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                String item = addInput.getText().toString();
+        subscriptions.add(filter.asObservable()
+                .subscribe(adapter));
+        subscriptions.add(
+                RxView.clicks(findViewById(R.id.btn_add_todo))
+                        .map(new Func1<Void, String>() {
+                            @Override
+                            public String call(Void aVoid) {
+                                return addInput.getText().toString();
+                            }
+                        })
+                        .filter(new Func1<String, Boolean>() {
+                            @Override
+                            public Boolean call(String s) {
+                                return !TextUtils.isEmpty(s);
+                            }
+                        })
+                        .subscribe(new Action1<String>() {
+                            @Override
+                            public void call(String s) {
+                                filter.getList().add(new Todo(s, false));
 
-                // ensure we don't add empty items
-                if (!TextUtils.isEmpty(item.trim())) {
+                                // reset the input box, move focus, and dismiss keyboard
+                                addInput.setText("");
+                                findViewById(R.id.add_todo_container).requestFocus();
+                                dismissKeyboard();
+                            }
+                        }));
 
-                    // update our list
-                    list.add(new Todo(item, false));
 
-                    // update the adapter with the latest filtered data
-                    adapter.onTodoListChanged(filter.getFilteredData());
+        subscriptions.add(
+                RxAdapterView.itemSelections(spinner)
+                        .skip(1)
+                        .subscribe(filter.asFilterSubscriber()));
 
-                    // clear input, remove focus, and hide keyboard
-                    addInput.setText("");
-                    findViewById(R.id.add_todo_container).requestFocus();
-                    dismissKeyboard();
-                }
-            }
-        });
-
-        // setup the toolbar
-        toolbar = (Toolbar) findViewById(R.id.toolbar);
-        setSupportActionBar(toolbar);
-
-        // setup the filter in the toolbar
-        spinner = (Spinner) toolbar.findViewById(R.id.spinner);
-        spinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, new String[]{"All", "Incomplete", "Completed"}));
-        spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                filter.setFilterMode(position);
-                adapter.onTodoListChanged(filter.getFilteredData());
-            }
-
-            @Override
-            public void onNothingSelected(AdapterView<?> parent) {
-                filter.setFilterMode(TodoListFilter.ALL);
-                adapter.onTodoListChanged(filter.getFilteredData());
-            }
-        });
+        spinner.setSelection(filter.getMode());
 
     }
 
     @Override
     protected void onSaveInstanceState(Bundle outState) {
-        outState.putString(LIST, list.toString());
+        outState.putString(LIST, filter.getList().toString());
+        outState.putInt(FILTER, filter.getMode());
         super.onSaveInstanceState(outState);
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-
-        SharedPreferences.Editor editor = getSharedPreferences("data", Context.MODE_PRIVATE).edit();
-        editor.putString(LIST, list.toString());
-        editor.apply();
+        subscriptions.unsubscribe();
     }
 
     private void dismissKeyboard() {
         InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
         imm.hideSoftInputFromWindow(addInput.getWindowToken(), 0);
     }
+
 }

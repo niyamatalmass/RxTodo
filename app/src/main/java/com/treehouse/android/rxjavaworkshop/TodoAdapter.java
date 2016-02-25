@@ -6,19 +6,23 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.CheckBox;
-import android.widget.CompoundButton;
 
-public class TodoAdapter extends RecyclerView.Adapter<TodoAdapter.TodoHolder> implements TodoListener {
+import com.jakewharton.rxbinding.widget.RxCompoundButton;
+
+import rx.Subscription;
+import rx.functions.Action1;
+import rx.functions.Func1;
+
+public class TodoAdapter extends RecyclerView.Adapter<TodoAdapter.TodoHolder> implements Action1<TodoList> {
 
     LayoutInflater inflater;
 
-    TodoCompletedChangeListener todoChangeListener;
-
     TodoList data = new TodoList();
+    Action1<Todo> subscriber;
 
-    public TodoAdapter(Activity activity, TodoCompletedChangeListener listener) {
+    public TodoAdapter(Activity activity, Action1<Todo> checkChangedSubscriber) {
         inflater = LayoutInflater.from(activity);
-        todoChangeListener = listener;
+        subscriber = checkChangedSubscriber;
     }
 
     @Override
@@ -35,29 +39,35 @@ public class TodoAdapter extends RecyclerView.Adapter<TodoAdapter.TodoHolder> im
     public void onBindViewHolder(TodoHolder holder, int position) {
         final Todo todo = data.get(position);
         holder.checkbox.setText(todo.description);
-
-        // ensure existing listener is nulled out, setting the value causes a check changed listener callback
-        holder.checkbox.setOnCheckedChangeListener(null);
-
-        // set the current value, then setup the listener
         holder.checkbox.setChecked(todo.isCompleted);
-        holder.checkbox.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                todoChangeListener.onTodoCompletedChanged(todo);
-            }
-        });
+
+        holder.subscription = RxCompoundButton.checkedChanges(holder.checkbox)
+                .skip(1)
+                .map(new Func1<Boolean, Todo>() {
+                    @Override
+                    public Todo call(Boolean aBoolean) {
+                        return todo;
+                    }
+                })
+                .subscribe(subscriber);
     }
 
     @Override
-    public void onTodoListChanged(TodoList updatedList) {
-        data = updatedList;
+    public void onViewDetachedFromWindow(TodoHolder holder) {
+        super.onViewDetachedFromWindow(holder);
+        holder.subscription.unsubscribe();
+    }
+
+    @Override
+    public void call(TodoList list) {
+        data = list;
         notifyDataSetChanged();
     }
 
     public class TodoHolder extends RecyclerView.ViewHolder {
 
         public CheckBox checkbox;
+        public Subscription subscription;
 
         public TodoHolder(View itemView) {
             super(itemView);
