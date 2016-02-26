@@ -13,9 +13,15 @@ import java.io.StringReader;
 import java.util.ArrayList;
 import java.util.List;
 
-public class TodoList {
+import rx.Observable;
+import rx.functions.Action1;
+import rx.subjects.ReplaySubject;
 
-    private TodoListener listener;
+public class TodoList implements Action1<Todo> {
+
+    // replays all onNext() calls to any new subscriber
+    ReplaySubject<TodoList> notifier = ReplaySubject.create();
+
     private List<Todo> todoList;
 
     public TodoList() {
@@ -27,41 +33,73 @@ public class TodoList {
         readJson(json);
     }
 
-    public void setListener(TodoListener listener) {
-        this.listener = listener;
-    }
-
-    public int size() {
-        return todoList.size();
-    }
-
-    public Todo get(int i) {
-        return todoList.get(i);
+    public Observable<TodoList> asObservable() {
+        return notifier;
     }
 
     public void add(Todo t) {
         todoList.add(t);
-        if (listener != null) {
-            listener.onTodoListChanged(this);
-        }
+        notifier.onNext(this);
     }
 
     public void remove(Todo t) {
         todoList.remove(t);
-        if (listener != null) {
-            listener.onTodoListChanged(this);
-        }
+        notifier.onNext(this);
     }
 
-    public void toggle(Todo t) {
+    @Override
+    public void call(Todo todo) {
+        toggle(todo);
+    }
+
+    private void toggle(Todo t) {
         Todo todo = todoList.get(todoList.indexOf(t));
-        boolean curVal = todo.isCompleted;
-        todo.isCompleted = !curVal;
-        if (listener != null) {
-            listener.onTodoListChanged(this);
-        }
+        todo.isCompleted = !todo.isCompleted;
+        notifier.onNext(this);
     }
 
+    /**
+     * Returns all items from this list in a List<>
+     *
+     * @return a List of all items
+     */
+    public List<Todo> getAll() {
+        return todoList;
+    }
+
+    /**
+     * Returns all items not marked as complete
+     *
+     * @return a List of items who's value for isComplete is false
+     */
+    public List<Todo> getIncomplete() {
+        ArrayList<Todo> incomplete = new ArrayList<>();
+        for (Todo t : todoList) {
+            if (!t.isCompleted) {
+                incomplete.add(t);
+            }
+        }
+
+        return incomplete;
+    }
+
+    /**
+     * Returns all completed items in the list
+     *
+     * @return a List of items who's value for isComplete is true
+     */
+    public List<Todo> getComplete() {
+        ArrayList<Todo> complete = new ArrayList<>();
+        for (Todo t : todoList) {
+            if (t.isCompleted) {
+                complete.add(t);
+            }
+        }
+
+        return complete;
+    }
+
+    // read in the String as a json
     private void readJson(String json) {
 
         if (json == null || TextUtils.isEmpty(json.trim())) {
@@ -88,14 +126,14 @@ public class TodoList {
                 }
                 boolean isComplete = reader.nextBoolean();
 
-                todoList.add(new Todo(description, isComplete));
+                add(new Todo(description, isComplete));
 
                 reader.endObject();
             }
 
             reader.endArray();
         } catch (IOException e) {
-
+            Log.i(TodoList.class.getName(), "Exception reading JSON " + e.getMessage());
         }
 
     }
@@ -123,9 +161,7 @@ public class TodoList {
             Log.i(TodoList.class.getName(), "Exception writing JSON " + e.getMessage());
         }
 
-
-        String json = new String(out.toByteArray());
-
-        return json;
+        return new String(out.toByteArray());
     }
+
 }

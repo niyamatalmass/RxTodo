@@ -15,18 +15,23 @@ import android.widget.Spinner;
 import com.jakewharton.rxbinding.view.RxView;
 import com.jakewharton.rxbinding.widget.RxAdapterView;
 
+import java.util.List;
+
 import butterknife.Bind;
 import butterknife.ButterKnife;
-import rx.android.schedulers.AndroidSchedulers;
+import rx.Observable;
 import rx.functions.Action1;
 import rx.functions.Func1;
-import rx.schedulers.Schedulers;
+import rx.functions.Func2;
 import rx.subscriptions.CompositeSubscription;
 
 public class MainActivity extends AppCompatActivity {
 
     private static final String LIST = "list";
     private static final String FILTER = "filter";
+
+    TodoList list;
+    int filterPosition;
 
     @Bind(R.id.toolbar)
     Toolbar toolbar;
@@ -37,10 +42,7 @@ public class MainActivity extends AppCompatActivity {
     @Bind(R.id.recyclerview)
     RecyclerView recyclerView;
 
-    TodoAdapter adapter;
-
-    TodoListFilter filter;
-
+    // used to handle unsubscription during teardown of Activity
     CompositeSubscription subscriptions = new CompositeSubscription();
 
     @Override
@@ -50,31 +52,52 @@ public class MainActivity extends AppCompatActivity {
         ButterKnife.bind(this);
         setSupportActionBar(toolbar);
 
-        spinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, new String[]{"All", "Incomplete", "Completed"}));
-
+        // retrieve the saved list and filter or use defaults
         if (savedInstanceState == null) {
-            TodoList l = new TodoList();
-            l.add(new Todo("Sample 1", false));
-            l.add(new Todo("Sample 2", true));
-            l.add(new Todo("Sample 3", false));
+            list = new TodoList();
 
-            filter = new TodoListFilter(l, TodoListFilter.ALL);
+            // add some sample items
+            list.add(new Todo("Sample 1", true));
+            list.add(new Todo("Sample 2", false));
+            list.add(new Todo("Sample 3", false));
+
+            filterPosition = FilterPositions.ALL;
         } else {
-            filter = new TodoListFilter(
-                    new TodoList(savedInstanceState.getString(LIST)),
-                    savedInstanceState.getInt(FILTER)
-            );
+            list = new TodoList(savedInstanceState.getString(LIST));
+            filterPosition = savedInstanceState.getInt(FILTER);
         }
 
-
-        adapter = new TodoAdapter(this, filter);
+        /*
+            The adapter listens to changes from the list Observable.
+            The list listens to changes from the Adapter.
+         */
+        TodoAdapter adapter = new TodoAdapter(this, list);
 
         // setup the list with the adapter
         recyclerView.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.VERTICAL, false));
         recyclerView.setAdapter(adapter);
 
-        subscriptions.add(filter.asObservable()
-                .subscribe(adapter));
+        // combine filter and todolist
+        subscriptions.add(
+                Observable.combineLatest(
+                        RxAdapterView.itemSelections(spinner).skip(1),
+                        list.asObservable(),
+                        new Func2<Integer, TodoList, List<Todo>>() {
+                            @Override
+                            public List<Todo> call(Integer integer, TodoList list) {
+                                switch (integer) {
+                                    case FilterPositions.INCOMPLETE:
+                                        return list.getIncomplete();
+                                    case FilterPositions.COMPLETE:
+                                        return list.getComplete();
+                                    default:
+                                        return list.getAll();
+                                }
+                            }
+                        }
+                ).subscribe(adapter)
+        );
+
         subscriptions.add(
                 RxView.clicks(findViewById(R.id.btn_add_todo))
                         .map(new Func1<Void, String>() {
@@ -92,7 +115,7 @@ public class MainActivity extends AppCompatActivity {
                         .subscribe(new Action1<String>() {
                             @Override
                             public void call(String s) {
-                                filter.getList().add(new Todo(s, false));
+                                list.add(new Todo(s, false));
 
                                 // reset the input box, move focus, and dismiss keyboard
                                 addInput.setText("");
@@ -102,19 +125,14 @@ public class MainActivity extends AppCompatActivity {
                         }));
 
 
-        subscriptions.add(
-                RxAdapterView.itemSelections(spinner)
-                        .skip(1)
-                        .subscribe(filter.asFilterSubscriber()));
-
-        spinner.setSelection(filter.getMode());
-
+        spinner.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, new String[]{"All", "Incomplete", "Completed"}));
+        spinner.setSelection(filterPosition);
     }
 
     @Override
     protected void onSaveInstanceState(Bundle outState) {
-        outState.putString(LIST, filter.getList().toString());
-        outState.putInt(FILTER, filter.getMode());
+        outState.putString(LIST, list.toString());
+        outState.putInt(FILTER, spinner.getSelectedItemPosition());
         super.onSaveInstanceState(outState);
     }
 
